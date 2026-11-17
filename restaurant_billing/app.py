@@ -3,14 +3,19 @@ from __future__ import annotations
 
 import base64
 import csv
+from functools import wraps
 import os
 import re
 import sqlite3
+import socket
 import sys
+from threading import RLock, Thread
 from datetime import date, datetime
 from pathlib import Path
 
 import webview
+from flask import Flask, jsonify, make_response, redirect, request, send_from_directory
+from waitress import create_server
 
 APP_NAME = "Table & Thyme Billing"
 GST_RATE = 0.05
@@ -62,6 +67,15 @@ class Store:
           id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
           dish_name TEXT NOT NULL, unit_price REAL NOT NULL, quantity INTEGER NOT NULL,
           line_total REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS waiter_orders(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, table_id INTEGER NOT NULL,
+          table_name TEXT NOT NULL, waiter_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL, bill_order_id INTEGER REFERENCES orders(id));
+        CREATE TABLE IF NOT EXISTS waiter_order_items(
+          id INTEGER PRIMARY KEY, waiter_order_id INTEGER NOT NULL REFERENCES waiter_orders(id) ON DELETE CASCADE,
+          dish_id INTEGER, dish_name TEXT NOT NULL, unit_price REAL NOT NULL,
+          quantity INTEGER NOT NULL, line_total REAL NOT NULL);
         """)
         if self.db.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
             categories = [
@@ -118,13 +132,14 @@ class Store:
 
 class Api:
     def __init__(self, root: Path):
+        self._lock = RLock()
         self.root = root
         self.data = data_root()
         self.store = Store(self.data / "restaurant.sqlite3")
 
     def _photo_url(self, path):
         if path and Path(path).is_file():
-            return Path(path).resolve().as_uri()
+            return "/photos/" + Path(path).name
         return ""
 
     def get_state(self):
@@ -135,9 +150,112 @@ class Api:
             row["photo_url"] = self._photo_url(row.get("image_path", ""))
             dishes.append(row)
         tables = as_dicts(self.store.db.execute("SELECT * FROM dining_tables ORDER BY name").fetchall())
+        lan_ip = "127.0.0.1"
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("192.0.2.1", 80))
+            lan_ip = probe.getsockname()[0]
+            probe.close()
+        except OSError:
+            pass
         return {"categories": categories, "dishes": dishes, "tables": tables,
-                "stock_sheet": (self.root / "assets" / "menu-food-sheet.jpg").resolve().as_uri(),
+                "stock_sheet": "/assets/menu-food-sheet.jpg",
+                "waiter_url": f"http://{lan_ip}:8765/waiter",
                 "date_label": date.today().strftime("%A, %d %B")}
+
+    def list_waiter_orders(self):
+        rows = self.store.db.execute(
+            "SELECT * FROM waiter_orders WHERE status!='billed' ORDER BY updated_at DESC, id DESC"
+        ).fetchall()
+        orders = []
+        for row in rows:
+            order = dict(row)
+            order["items"] = as_dicts(self.store.db.execute(
+                "SELECT dish_id,dish_name AS name,unit_price AS price,quantity,line_total "
+                "FROM waiter_order_items WHERE waiter_order_id=? ORDER BY id", (row["id"],)
+            ).fetchall())
+            orders.append(order)
+        return {"ok": True, "orders": orders}
+
+    def save_waiter_order(self, order_id, table_id, waiter_name, items):
+        waiter_name = (waiter_name or "").strip()
+        table = self.store.db.execute("SELECT id,name FROM dining_tables WHERE id=?", (int(table_id or 0),)).fetchone()
+        if not table:
+            return {"ok": False, "error": "Choose an available table."}
+        if not waiter_name:
+            return {"ok": False, "error": "Enter the waiter's name."}
+        normalized, subtotal = [], 0.0
+        for item in items or []:
+            dish = self.store.db.execute("SELECT id,name,price FROM dishes WHERE id=?", (int(item.get("dish_id", 0)),)).fetchone()
+            quantity = int(item.get("quantity", 0))
+            if dish and quantity > 0:
+                line_total = round(float(dish["price"]) * quantity, 2)
+                normalized.append({"dish_id": dish["id"], "name": dish["name"], "price": float(dish["price"]),
+                                   "quantity": quantity, "line_total": line_total})
+                subtotal += line_total
+        if not normalized:
+            return {"ok": False, "error": "Add at least one dish to the order."}
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        try:
+            with self.store.db:
+                if order_id:
+                    existing = self.store.db.execute("SELECT status FROM waiter_orders WHERE id=?", (int(order_id),)).fetchone()
+                    if not existing or existing["status"] == "billed":
+                        return {"ok": False, "error": "This order is already billed or no longer available."}
+                    self.store.db.execute(
+                        "UPDATE waiter_orders SET table_id=?,table_name=?,waiter_name=?,status='open',updated_at=? WHERE id=?",
+                        (table["id"], table["name"], waiter_name, now, int(order_id)))
+                    self.store.db.execute("DELETE FROM waiter_order_items WHERE waiter_order_id=?", (int(order_id),))
+                    saved_id = int(order_id)
+                else:
+                    cursor = self.store.db.execute(
+                        "INSERT INTO waiter_orders(table_id,table_name,waiter_name,status,created_at,updated_at) VALUES(?,?,?,'open',?,?)",
+                        (table["id"], table["name"], waiter_name, now, now))
+                    saved_id = cursor.lastrowid
+                self.store.db.executemany(
+                    "INSERT INTO waiter_order_items(waiter_order_id,dish_id,dish_name,unit_price,quantity,line_total) VALUES(?,?,?,?,?,?)",
+                    [(saved_id, x["dish_id"], x["name"], x["price"], x["quantity"], x["line_total"]) for x in normalized])
+            return {"ok": True, "order_id": saved_id, "table_id": table["id"], "table_name": table["name"],
+                    "waiter_name": waiter_name, "items": normalized, "subtotal": round(subtotal, 2)}
+        except sqlite3.Error as error:
+            return {"ok": False, "error": f"Could not save waiter order: {error}"}
+
+    def mark_waiter_ready(self, order_id):
+        with self.store.db:
+            result = self.store.db.execute("UPDATE waiter_orders SET status='ready',updated_at=? WHERE id=? AND status='open'",
+                                           (datetime.now().astimezone().isoformat(timespec="seconds"), int(order_id)))
+        return {"ok": result.rowcount == 1, "error": "Order not found or already billed." if result.rowcount != 1 else ""}
+
+    def bill_waiter_order(self, order_id):
+        try:
+            now = datetime.now().astimezone().isoformat(timespec="seconds")
+            with self.store.db:
+                order = self.store.db.execute("SELECT * FROM waiter_orders WHERE id=? AND status!='billed'", (int(order_id),)).fetchone()
+                if not order:
+                    return {"ok": False, "error": "This order is already billed or no longer available."}
+                items = as_dicts(self.store.db.execute(
+                    "SELECT dish_name AS name,unit_price AS price,quantity,line_total FROM waiter_order_items WHERE waiter_order_id=? ORDER BY id",
+                    (int(order_id),)).fetchall())
+                if not items:
+                    return {"ok": False, "error": "This waiter order has no dishes."}
+                subtotal = round(sum(float(i["line_total"]) for i in items), 2)
+                gst = round(subtotal * GST_RATE, 2)
+                total = round(subtotal + gst, 2)
+                cursor = self.store.db.execute(
+                    "INSERT INTO orders(created_at,service_type,table_name,subtotal,gst,total) VALUES(?,?,?,?,?,?)",
+                    (now, "Dine in", order["table_name"], subtotal, gst, total))
+                bill_id = cursor.lastrowid
+                self.store.db.executemany(
+                    "INSERT INTO order_items(order_id,dish_name,unit_price,quantity,line_total) VALUES(?,?,?,?,?)",
+                    [(bill_id, i["name"], i["price"], i["quantity"], i["line_total"]) for i in items])
+                self.store.db.execute("UPDATE waiter_orders SET status='billed',updated_at=?,bill_order_id=? WHERE id=?",
+                                      (now, bill_id, int(order_id)))
+            return {"ok": True, "order_id": bill_id, "waiter_order_id": int(order_id), "created_at": now,
+                    "service": "Dine in", "table": order["table_name"], "waiter": order["waiter_name"],
+                    "subtotal": subtotal, "gst": gst, "total": total,
+                    "items": [{**i, "dish_id": None} for i in items]}
+        except (ValueError, sqlite3.Error) as error:
+            return {"ok": False, "error": f"Could not create bill: {error}"}
 
     def save_category(self, category_id, name, description):
         name = (name or "").strip()
@@ -278,11 +396,65 @@ class Api:
         return {"ok": True, "path": str(path)}
 
 
+def synchronized(method):
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
+for _api_method in (name for name in dir(Api) if not name.startswith("_") and callable(getattr(Api, name))):
+    setattr(Api, _api_method, synchronized(getattr(Api, _api_method)))
+
+
 def main():
     root = resource_root()
     api = Api(root)
-    page = root / "index.html"
-    webview.create_window(APP_NAME, page.resolve().as_uri(), width=1440, height=960,
+    app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
+    exposed = {name for name in dir(api) if not name.startswith("_") and callable(getattr(api, name))}
+
+    @app.get("/")
+    def index():
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            return redirect("/waiter")
+        return send_from_directory(root, "index.html")
+
+    @app.get("/waiter")
+    def waiter_index():
+        response = make_response(send_from_directory(root, "index.html"))
+        response.set_cookie("client_mode", "waiter", httponly=True, samesite="Lax")
+        return response
+
+    @app.get("/assets/<path:name>")
+    def assets(name):
+        return send_from_directory(root / "assets", name)
+
+    @app.get("/photos/<path:name>")
+    def photos(name):
+        return send_from_directory(api.data / "photos", name)
+
+    @app.post("/api/<method>")
+    def api_call(method):
+        if method not in exposed:
+            return jsonify({"ok": False, "error": "Unknown operation."}), 404
+        waiter_methods = {"get_state", "list_waiter_orders", "save_waiter_order", "mark_waiter_ready", "bill_waiter_order"}
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            if request.cookies.get("client_mode") != "waiter" or method not in waiter_methods:
+                return jsonify({"ok": False, "error": "This operation is only available in the Waiter screen."}), 403
+        try:
+            payload = request.get_json(silent=True) or {}
+            with api._lock:
+                result = getattr(api, method)(*(payload.get("args") or []))
+            return jsonify(result)
+        except Exception as error:
+            app.logger.exception("API call failed: %s", method)
+            return jsonify({"ok": False, "error": str(error)}), 400
+
+    server = create_server(app, host="0.0.0.0", port=8765, threads=16)
+    Thread(target=server.run, daemon=True).start()
+    webview.create_window(APP_NAME, "http://127.0.0.1:8765/", width=1440, height=960,
                           min_size=(1024, 720), js_api=api, background_color="#fbfaf7")
     webview.start(debug=False)
 
