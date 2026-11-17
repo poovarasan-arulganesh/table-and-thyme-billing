@@ -7,7 +7,7 @@ An offline-first restaurant billing app for Windows. The billing computer stores
 - Casual mode with menu search, category filters, photo dish cards, prominent add buttons, quantity controls, order totals, and a 5% GST estimate.
 - Waiter orders for multiple tables, saved to a shared open-order list. Waiters can reopen and edit orders, then send them to the Windows Biller queue. Each send starts a fresh order for the next table.
 - The Windows Biller screen groups orders by waiter. Select a waiter to review prices, add or edit dishes, cancel an individual table order, mark food ready, and print its GST receipt. Tablets cannot create or print bills.
-- The Windows Biller screen refreshes its waiter list every 30 seconds. The tablet Waiter route shows only the waiter interface and disables double-tap zoom.
+- The Windows Biller screen refreshes its waiter list every 30 seconds. The tablet Waiter route shows only the waiter interface, uses mobile and tablet layouts, displays each dish quantity on its menu button, and disables double-tap zoom.
 - The waiter QR is shown large on screen and has a size slider. The local network link opens the Waiter screen on tablets connected to the restaurant Wi-Fi.
 - Dine-in and delivery orders, with the dine-in table selector synchronized with Admin mode.
 - Printable GST bill preview and save/print action. The sample bill does not include a restaurant name.
@@ -49,4 +49,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.5.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
+Tag a version such as `v1.6.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
