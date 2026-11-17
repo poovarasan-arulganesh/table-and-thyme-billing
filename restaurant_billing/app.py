@@ -171,7 +171,7 @@ class Api:
 
     def list_waiter_orders(self):
         rows = self.store.db.execute(
-            "SELECT * FROM waiter_orders WHERE status!='billed' ORDER BY updated_at DESC, id DESC"
+            "SELECT * FROM waiter_orders WHERE status NOT IN ('billed','cancelled') ORDER BY updated_at DESC, id DESC"
         ).fetchall()
         orders = []
         for row in rows:
@@ -231,6 +231,35 @@ class Api:
             result = self.store.db.execute("UPDATE waiter_orders SET status='ready',updated_at=? WHERE id=? AND status IN ('open','sent')",
                                            (datetime.now().astimezone().isoformat(timespec="seconds"), int(order_id)))
         return {"ok": result.rowcount == 1, "error": "Order not found or already billed." if result.rowcount != 1 else ""}
+
+    def update_waiter_order_from_biller(self, order_id, items):
+        order = self.store.db.execute("SELECT status FROM waiter_orders WHERE id=?", (int(order_id),)).fetchone()
+        if not order or order["status"] not in ("sent", "ready"):
+            return {"ok": False, "error": "This order can no longer be edited."}
+        updated, now = [], datetime.now().astimezone().isoformat(timespec="seconds")
+        for item in items or []:
+            dish = self.store.db.execute("SELECT id,name,price FROM dishes WHERE id=?", (int(item.get("dish_id", 0)),)).fetchone()
+            quantity = int(item.get("quantity", 0))
+            if dish and quantity > 0:
+                line_total = round(float(dish["price"]) * quantity, 2)
+                updated.append((int(order_id), dish["id"], dish["name"], float(dish["price"]), quantity, line_total))
+        if not updated:
+            return {"ok": False, "error": "An order must contain at least one dish. Cancel it if the order is no longer needed."}
+        with self.store.db:
+            self.store.db.execute("DELETE FROM waiter_order_items WHERE waiter_order_id=?", (int(order_id),))
+            self.store.db.executemany(
+                "INSERT INTO waiter_order_items(waiter_order_id,dish_id,dish_name,unit_price,quantity,line_total) VALUES(?,?,?,?,?,?)",
+                updated)
+            self.store.db.execute("UPDATE waiter_orders SET updated_at=? WHERE id=?", (now, int(order_id)))
+        return {"ok": True}
+
+    def cancel_waiter_order(self, order_id):
+        with self.store.db:
+            result = self.store.db.execute(
+                "UPDATE waiter_orders SET status='cancelled',updated_at=? WHERE id=? AND status IN ('open','sent','ready')",
+                (datetime.now().astimezone().isoformat(timespec="seconds"), int(order_id)))
+        return {"ok": result.rowcount == 1,
+                "error": "This order can no longer be cancelled." if result.rowcount != 1 else ""}
 
     def bill_waiter_order(self, order_id):
         try:
