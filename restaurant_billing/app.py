@@ -408,6 +408,20 @@ class Api:
                 except ValueError: return {"ok": False, "error": "Use dates in YYYY-MM-DD format."}
         return {"ok": True, **self.store.report(start, end)}
 
+    def reset_sales_history(self):
+        """Remove completed bill history while keeping active waiter orders."""
+        db = self.store.db
+        bills_deleted = db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+        archived_waiter_orders_deleted = db.execute(
+            "SELECT COUNT(*) FROM waiter_orders WHERE status IN ('billed','cancelled')"
+        ).fetchone()[0]
+        with db:
+            db.execute("DELETE FROM waiter_orders WHERE status IN ('billed','cancelled')")
+            db.execute("UPDATE waiter_orders SET bill_order_id=NULL WHERE bill_order_id IS NOT NULL")
+            db.execute("DELETE FROM orders")
+        return {"ok": True, "bills_deleted": bills_deleted,
+                "archived_waiter_orders_deleted": archived_waiter_orders_deleted}
+
     def export_report(self, start="", end=""):
         try:
             import webview as webview_module
@@ -524,7 +538,14 @@ def main():
 
     @app.get("/waiter")
     def waiter_index():
-        response = make_response(send_from_directory(root, "index.html"))
+        html = (root / "index.html").read_text(encoding="utf-8")
+        html = html.replace(
+            '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">',
+            '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">',
+            1,
+        )
+        response = make_response(html)
+        response.headers["Cache-Control"] = "no-store"
         response.set_cookie("client_mode", "waiter", httponly=True, samesite="Lax")
         return response
 
