@@ -19,7 +19,7 @@ import qrcode
 from flask import Flask, jsonify, make_response, redirect, request, send_from_directory
 from waitress import create_server
 
-APP_NAME = "Table & Thyme Billing"
+APP_NAME = "HIGHWAY29 Billing"
 GST_RATE = 0.05
 
 
@@ -423,12 +423,78 @@ class Api:
         with path.open("w", newline="", encoding="utf-8-sig") as handle:
             writer = csv.writer(handle)
             writer.writerow(["Sales report", start or "All time", end or "All time"])
-            writer.writerow(["Orders", report["summary"]["orders"], "Food sales", report["summary"]["sales"], "GST", report["summary"]["gst"]])
+            writer.writerow(["Orders", report["summary"]["orders"], "GST collected", report["summary"]["gst"]])
             writer.writerow([]); writer.writerow(["Dish", "Quantity sold", "Sales"])
             for row in report["sold"]: writer.writerow([row["dish_name"], row["quantity"], row["sales"]])
             writer.writerow([]); writer.writerow(["Order ID", "Date", "Service", "Table", "Subtotal", "GST", "Total"])
             for row in report["orders"]: writer.writerow([row["id"], row["created_at"], row["service_type"], row["table_name"], row["subtotal"], row["gst"], row["total"]])
         return {"ok": True, "path": str(path)}
+
+    def export_report_excel(self, start="", end=""):
+        validation = self.get_report(start, end)
+        if not validation.get("ok"):
+            return validation
+        try:
+            import webview as webview_module
+            selected = webview_module.windows[0].create_file_dialog(
+                webview_module.SAVE_DIALOG,
+                save_filename=f"highway29-orders-{start or 'all'}-to-{end or 'all'}.xlsx",
+                file_types=("Excel workbook (*.xlsx)",))
+        except Exception as error:
+            return {"ok": False, "error": f"Could not open the save dialog: {error}"}
+        if not selected:
+            return {"ok": False, "cancelled": True}
+        path = Path(selected[0] if isinstance(selected, (list, tuple)) else selected)
+        if path.suffix.lower() != ".xlsx":
+            path = path.with_suffix(".xlsx")
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+
+            report = self.store.report(start, end)
+            workbook = Workbook()
+            orders_sheet = workbook.active
+            orders_sheet.title = "Orders"
+            orders_sheet.append(["HIGHWAY29 · Order report", f"From {start or 'all time'} to {end or 'all time'}"])
+            orders_sheet.append(["Order #", "Date & time", "Service", "Table", "Items", "Subtotal", "GST", "Total"])
+            for order in report["orders"]:
+                items = as_dicts(self.store.db.execute(
+                    "SELECT dish_name,quantity FROM order_items WHERE order_id=? ORDER BY id", (order["id"],)
+                ).fetchall())
+                item_summary = ", ".join(f"{item['dish_name']} × {item['quantity']}" for item in items)
+                orders_sheet.append([
+                    order["id"], order["created_at"], order["service_type"], order["table_name"],
+                    item_summary, order["subtotal"], order["gst"], order["total"]])
+
+            summary = workbook.create_sheet("Summary")
+            summary.append(["HIGHWAY29 · Report summary"])
+            summary.append(["From", start or "All time"])
+            summary.append(["To", end or "All time"])
+            summary.append(["Completed orders", report["summary"]["orders"]])
+            summary.append(["GST collected", report["summary"]["gst"]])
+            for sheet in workbook.worksheets:
+                sheet.freeze_panes = "A3" if sheet.title == "Orders" else "A2"
+                sheet.auto_filter.ref = f"A2:H{max(2, sheet.max_row)}" if sheet.title == "Orders" else "A1:B5"
+                for cell in sheet[1]:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill("solid", fgColor="285A43")
+                if sheet.title == "Orders":
+                    for cell in sheet[2]:
+                        cell.font = Font(bold=True, color="FFFFFF")
+                        cell.fill = PatternFill("solid", fgColor="285A43")
+                    for row in sheet.iter_rows(min_row=3, min_col=6, max_col=8):
+                        for cell in row:
+                            cell.number_format = '₹#,##0.00'
+                    for column, width in {"A": 12, "B": 24, "C": 16, "D": 18, "E": 50, "F": 16, "G": 14, "H": 16}.items():
+                        sheet.column_dimensions[column].width = width
+                else:
+                    sheet.column_dimensions["A"].width = 24
+                    sheet.column_dimensions["B"].width = 28
+                    sheet[5][1].number_format = '₹#,##0.00'
+            workbook.save(path)
+            return {"ok": True, "path": str(path)}
+        except Exception as error:
+            return {"ok": False, "error": f"Could not export the Excel report: {error}"}
 
 
 def synchronized(method):

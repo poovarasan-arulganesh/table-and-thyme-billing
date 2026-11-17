@@ -1,19 +1,19 @@
-# Table & Thyme Billing
+# HIGHWAY29 Billing
 
 An offline-first restaurant billing app for Windows. The billing computer stores menu data, tables, reports, and bills locally in SQLite, and hosts a private Waiter screen on the restaurant Wi-Fi for tablets.
 
 ## Features
 
 - Casual mode with menu search, category filters, photo dish cards, prominent add buttons, quantity controls, order totals, and a 5% GST estimate.
-- Waiter orders for multiple tables, saved to a shared open-order list. Waiters can reopen and edit orders, then send them to the Windows Biller queue.
+- Waiter orders for multiple tables, saved to a shared open-order list. Waiters can reopen and edit orders, then send them to the Windows Biller queue. Each send starts a fresh order for the next table.
 - The Windows Biller screen groups orders by waiter. Select a waiter to review prices, add or edit dishes, cancel an individual table order, mark food ready, and print its GST receipt. Tablets cannot create or print bills.
 - The Windows Biller screen refreshes its waiter list every 30 seconds. The tablet Waiter route shows only the waiter interface and disables double-tap zoom.
-- A clickable QR code and local network link open the Waiter screen on tablets connected to the restaurant Wi-Fi.
+- The waiter QR is shown large on screen and has a size slider. The local network link opens the Waiter screen on tablets connected to the restaurant Wi-Fi.
 - Dine-in and delivery orders, with the dine-in table selector synchronized with Admin mode.
 - Printable GST bill preview and save/print action. The sample bill does not include a restaurant name.
 - Admin mode for creating, renaming, and removing categories, dishes, and tables. Dish records include name, price, optional description, and an uploaded photo.
-- Sales reports with a date range or all-time view, completed order count, food sales, GST collected, best-selling dishes, and recent orders.
-- Export reports to CSV.
+- Sales reports with a date range or all-time view, completed order count, GST collected, best-selling dishes, and recent orders.
+- Export date filtered order lists and GST summaries to Excel, or save the report as CSV.
 - Light and dark themes.
 - Orders entered on a tablet during a temporary connection loss are kept in that browser and sync when the billing computer is reachable again. Bills can be finalized after reconnecting.
 - Local storage keeps the billing computer working during an internet outage. Waiter tablets still need the restaurant Wi-Fi connection to reach the billing computer.
@@ -33,10 +33,10 @@ On Windows, install Python 3.12 and the Microsoft Edge WebView2 Runtime, then ru
 
 ```powershell
 python -m pip install -r requirements.txt
-pyinstaller --noconfirm --clean --onefile --windowed --name TableAndThymeBilling --collect-all webview --collect-all flask --collect-all waitress --collect-all qrcode --collect-all PIL --add-data "restaurant_billing/ui;restaurant_billing/ui" restaurant_billing/app.py
+pyinstaller --noconfirm --clean --onefile --windowed --name HIGHWAY29Billing --collect-all webview --collect-all flask --collect-all waitress --collect-all qrcode --collect-all PIL --collect-all openpyxl --add-data "restaurant_billing/ui;restaurant_billing/ui" restaurant_billing/app.py
 ```
 
-The standalone app is created under `dist/TableAndThymeBilling.exe`. Start it on the restaurant computer, keep the devices on the same Wi-Fi network, then open the Tablet link shown in the app on each waiter tablet. If Windows Firewall asks, allow access on private networks. The app remains usable on the billing computer when the internet is unavailable; waiter tablets still need a working local Wi-Fi connection to reach it.
+The standalone app is created under `dist/HIGHWAY29Billing.exe`. Start it on the restaurant computer, keep the devices on the same Wi-Fi network, then open the Tablet link shown in the app on each waiter tablet. If Windows Firewall asks, allow access on private networks. The app remains usable on the billing computer when the internet is unavailable; waiter tablets still need a working local Wi-Fi connection to reach it.
 
 The GitHub Actions workflow `.github/workflows/windows-release.yml` builds the Windows executable when a `v*.*.*` tag is pushed and attaches it to the GitHub Release.
 
@@ -49,4 +49,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.4.0` and push the tag. GitHub Actions builds and publishes `TableAndThymeBilling.exe` to that release.
+Tag a version such as `v1.5.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
