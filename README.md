@@ -42,4 +42,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.1.0` and push the tag. GitHub Actions builds and publishes `TableAndThymeBilling.exe` to that release.
+Tag a version such as `v1.1.1` and push the tag. GitHub Actions builds and publishes `TableAndThymeBilling.exe` to that release.
