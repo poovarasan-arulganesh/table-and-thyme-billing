@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import csv
 from functools import wraps
+from io import BytesIO
 import os
 import re
 import sqlite3
@@ -14,6 +15,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import webview
+import qrcode
 from flask import Flask, jsonify, make_response, redirect, request, send_from_directory
 from waitress import create_server
 
@@ -158,9 +160,13 @@ class Api:
             probe.close()
         except OSError:
             pass
+        waiter_url = f"http://{lan_ip}:8765/waiter"
+        qr_buffer = BytesIO()
+        qrcode.make(waiter_url).save(qr_buffer, format="PNG")
         return {"categories": categories, "dishes": dishes, "tables": tables,
                 "stock_sheet": "/assets/menu-food-sheet.jpg",
-                "waiter_url": f"http://{lan_ip}:8765/waiter",
+                "waiter_url": waiter_url,
+                "waiter_qr_data": "data:image/png;base64," + base64.b64encode(qr_buffer.getvalue()).decode("ascii"),
                 "date_label": date.today().strftime("%A, %d %B")}
 
     def list_waiter_orders(self):
@@ -200,16 +206,16 @@ class Api:
             with self.store.db:
                 if order_id:
                     existing = self.store.db.execute("SELECT status FROM waiter_orders WHERE id=?", (int(order_id),)).fetchone()
-                    if not existing or existing["status"] == "billed":
-                        return {"ok": False, "error": "This order is already billed or no longer available."}
+                    if not existing or existing["status"] in ("ready", "billed"):
+                        return {"ok": False, "error": "This order is ready for billing or no longer available."}
                     self.store.db.execute(
-                        "UPDATE waiter_orders SET table_id=?,table_name=?,waiter_name=?,status='open',updated_at=? WHERE id=?",
+                        "UPDATE waiter_orders SET table_id=?,table_name=?,waiter_name=?,status='sent',updated_at=? WHERE id=?",
                         (table["id"], table["name"], waiter_name, now, int(order_id)))
                     self.store.db.execute("DELETE FROM waiter_order_items WHERE waiter_order_id=?", (int(order_id),))
                     saved_id = int(order_id)
                 else:
                     cursor = self.store.db.execute(
-                        "INSERT INTO waiter_orders(table_id,table_name,waiter_name,status,created_at,updated_at) VALUES(?,?,?,'open',?,?)",
+                        "INSERT INTO waiter_orders(table_id,table_name,waiter_name,status,created_at,updated_at) VALUES(?,?,?,'sent',?,?)",
                         (table["id"], table["name"], waiter_name, now, now))
                     saved_id = cursor.lastrowid
                 self.store.db.executemany(
@@ -222,7 +228,7 @@ class Api:
 
     def mark_waiter_ready(self, order_id):
         with self.store.db:
-            result = self.store.db.execute("UPDATE waiter_orders SET status='ready',updated_at=? WHERE id=? AND status='open'",
+            result = self.store.db.execute("UPDATE waiter_orders SET status='ready',updated_at=? WHERE id=? AND status IN ('open','sent')",
                                            (datetime.now().astimezone().isoformat(timespec="seconds"), int(order_id)))
         return {"ok": result.rowcount == 1, "error": "Order not found or already billed." if result.rowcount != 1 else ""}
 
@@ -230,9 +236,9 @@ class Api:
         try:
             now = datetime.now().astimezone().isoformat(timespec="seconds")
             with self.store.db:
-                order = self.store.db.execute("SELECT * FROM waiter_orders WHERE id=? AND status!='billed'", (int(order_id),)).fetchone()
+                order = self.store.db.execute("SELECT * FROM waiter_orders WHERE id=? AND status='ready'", (int(order_id),)).fetchone()
                 if not order:
-                    return {"ok": False, "error": "This order is already billed or no longer available."}
+                    return {"ok": False, "error": "Mark the food ready in the Windows Biller screen before printing its bill."}
                 items = as_dicts(self.store.db.execute(
                     "SELECT dish_name AS name,unit_price AS price,quantity,line_total FROM waiter_order_items WHERE waiter_order_id=? ORDER BY id",
                     (int(order_id),)).fetchall())
@@ -439,7 +445,7 @@ def main():
     def api_call(method):
         if method not in exposed:
             return jsonify({"ok": False, "error": "Unknown operation."}), 404
-        waiter_methods = {"get_state", "list_waiter_orders", "save_waiter_order", "mark_waiter_ready", "bill_waiter_order"}
+        waiter_methods = {"get_state", "list_waiter_orders", "save_waiter_order"}
         if request.remote_addr not in ("127.0.0.1", "::1"):
             if request.cookies.get("client_mode") != "waiter" or method not in waiter_methods:
                 return jsonify({"ok": False, "error": "This operation is only available in the Waiter screen."}), 403

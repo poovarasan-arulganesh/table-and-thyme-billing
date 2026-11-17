@@ -5,8 +5,9 @@ An offline-first restaurant billing app for Windows. The billing computer stores
 ## Features
 
 - Casual mode with menu search, category filters, photo dish cards, prominent add buttons, quantity controls, order totals, and a 5% GST estimate.
-- Waiter orders for multiple tables, saved to a shared open-order list. Waiters can reopen and edit an order, mark it food-ready, and create and print its GST bill from the Waiter screen.
-- A local network server lets tablets on the restaurant Wi-Fi open the Waiter screen and share the same menu, tables, and orders as the billing computer.
+- Waiter orders for multiple tables, saved to a shared open-order list. Waiters can reopen and edit orders, then send them to the Windows Biller queue.
+- The Windows Biller screen can mark food ready, create the GST invoice, and print the receipt. Tablets cannot create or print bills.
+- A clickable QR code and local network link open the Waiter screen on tablets connected to the restaurant Wi-Fi.
 - Dine-in and delivery orders, with the dine-in table selector synchronized with Admin mode.
 - Printable GST bill preview and save/print action. The sample bill does not include a restaurant name.
 - Admin mode for creating, renaming, and removing categories, dishes, and tables. Dish records include name, price, optional description, and an uploaded photo.
@@ -31,7 +32,7 @@ On Windows, install Python 3.12 and the Microsoft Edge WebView2 Runtime, then ru
 
 ```powershell
 python -m pip install -r requirements.txt
-pyinstaller --noconfirm --clean --onefile --windowed --name TableAndThymeBilling --collect-all webview --collect-all flask --collect-all waitress --add-data "restaurant_billing/ui;restaurant_billing/ui" restaurant_billing/app.py
+pyinstaller --noconfirm --clean --onefile --windowed --name TableAndThymeBilling --collect-all webview --collect-all flask --collect-all waitress --collect-all qrcode --collect-all PIL --add-data "restaurant_billing/ui;restaurant_billing/ui" restaurant_billing/app.py
 ```
 
 The standalone app is created under `dist/TableAndThymeBilling.exe`. Start it on the restaurant computer, keep the devices on the same Wi-Fi network, then open the Tablet link shown in the app on each waiter tablet. If Windows Firewall asks, allow access on private networks. The app remains usable on the billing computer when the internet is unavailable; waiter tablets still need a working local Wi-Fi connection to reach it.
@@ -47,4 +48,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.2.0` and push the tag. GitHub Actions builds and publishes `TableAndThymeBilling.exe` to that release.
+Tag a version such as `v1.3.0` and push the tag. GitHub Actions builds and publishes `TableAndThymeBilling.exe` to that release.
