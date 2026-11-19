@@ -144,6 +144,12 @@ class Api:
             return "/photos/" + Path(path).name
         return ""
 
+    def toggle_fullscreen(self):
+        if not webview.windows:
+            return {"ok": False, "error": "The desktop window is not ready."}
+        webview.windows[0].toggle_fullscreen()
+        return {"ok": True}
+
     def get_state(self):
         categories = as_dicts(self.store.db.execute("SELECT * FROM categories ORDER BY sort_order,name").fetchall())
         dishes = []
