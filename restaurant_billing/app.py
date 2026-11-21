@@ -12,7 +12,6 @@ import re
 import sqlite3
 import socket
 import sys
-import uuid
 import zipfile
 from threading import Event, RLock, Thread
 from datetime import date, datetime
@@ -500,18 +499,30 @@ class Api:
         return {"ok": True}
 
     def export_menu_zip(self):
-        """Export categories, dishes, and referenced images in a portable ZIP archive."""
+        """Save categories, dishes, and referenced images to a user-selected ZIP file."""
+        try:
+            import webview as webview_module
+            selected = webview_module.windows[0].create_file_dialog(
+                webview_module.SAVE_DIALOG,
+                save_filename=f"HIGHWAY29-menu-{date.today().isoformat()}.zip",
+                file_types=("ZIP archives (*.zip)",))
+        except Exception as error:
+            return {"ok": False, "error": f"Could not open the Save As dialog: {error}"}
+        if not selected:
+            return {"ok": False, "cancelled": True}
+        target = Path(selected[0] if isinstance(selected, (list, tuple)) else selected)
+        if target.suffix.lower() != ".zip":
+            target = target.with_suffix(".zip")
         categories = as_dicts(self.store.db.execute(
             "SELECT name,description,sort_order FROM categories ORDER BY sort_order,name").fetchall())
         dishes = as_dicts(self.store.db.execute(
             "SELECT d.id,d.name,d.description,d.price,c.name AS category,d.image_path "
             "FROM dishes d JOIN categories c ON c.id=d.category_id ORDER BY c.sort_order,c.name,d.name").fetchall())
         manifest = {"format": "HIGHWAY29 menu", "version": 1, "categories": categories, "dishes": []}
-        filename = f"menu-export-{uuid.uuid4().hex}.zip"
-        target = self.data / "reports" / filename
         total_size = 0
+        buffer = BytesIO()
         try:
-            with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for dish in dishes:
                     image_ref = ""
                     image_path = Path(dish.pop("image_path") or "")
@@ -530,10 +541,10 @@ class Api:
                     dish.pop("id", None)
                     manifest["dishes"].append(dish)
                 archive.writestr("menu.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
-            return {"ok": True, "filename": filename, "url": f"/menu-exports/{filename}",
+            target.write_bytes(buffer.getvalue())
+            return {"ok": True, "filename": target.name, "path": str(target),
                     "categories": len(categories), "dishes": len(dishes)}
         except (OSError, ValueError, zipfile.BadZipFile) as error:
-            target.unlink(missing_ok=True)
             return {"ok": False, "error": str(error) or "Could not export the menu ZIP."}
 
     def import_menu_zip(self, archive_base64):
@@ -838,12 +849,6 @@ def main():
     @app.get("/photos/<path:name>")
     def photos(name):
         return send_from_directory(api.data / "photos", name)
-
-    @app.get("/menu-exports/<name>")
-    def menu_exports(name):
-        if request.remote_addr not in ("127.0.0.1", "::1") or not re.fullmatch(r"menu-export-[a-f0-9]{32}\.zip", name):
-            return jsonify({"ok": False, "error": "Menu exports are only available in Admin mode on this computer."}), 403
-        return send_from_directory(api.data / "reports", name, as_attachment=True, download_name="HIGHWAY29-menu.zip")
 
     @app.post("/api/<method>")
     def api_call(method):
