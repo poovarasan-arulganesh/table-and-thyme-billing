@@ -10,7 +10,7 @@ import re
 import sqlite3
 import socket
 import sys
-from threading import RLock, Thread
+from threading import Event, RLock, Thread
 from datetime import date, datetime
 from pathlib import Path
 
@@ -149,6 +149,69 @@ class Api:
             return {"ok": False, "error": "The desktop window is not ready."}
         webview.windows[0].toggle_fullscreen()
         return {"ok": True}
+
+    def print_receipt(self):
+        """Print the prepared receipt silently to the installed BillQuick/default printer."""
+        if sys.platform != "win32":
+            return {"ok": False, "error": "Direct receipt printing is available in the Windows billing app."}
+        if not webview.windows:
+            return {"ok": False, "error": "The billing window is not ready for printing."}
+
+        window = webview.windows[0]
+        completed = Event()
+        result = {}
+
+        def finish_print(task):
+            try:
+                status = str(task.GetAwaiter().GetResult())
+                if "succeeded" in status.lower():
+                    result.update(ok=True, printer=result.get("printer", "Windows printer"))
+                elif "unavailable" in status.lower():
+                    result.update(ok=False, error="The receipt printer is offline or unavailable.")
+                else:
+                    result.update(ok=False, error=f"Receipt printing failed ({status}).")
+            except Exception as error:
+                result.update(ok=False, error=f"Receipt printing failed: {error}")
+            finally:
+                completed.set()
+
+        def begin_print():
+            try:
+                from System import Action
+                from System.Drawing.Printing import PrinterSettings
+
+                printers = [str(name) for name in PrinterSettings.InstalledPrinters]
+                printer = next((name for name in printers
+                                if "billquick" in name.lower() or "helet" in name.lower()), None)
+                if printer is None:
+                    printer = str(PrinterSettings().PrinterName or "")
+                if not printer:
+                    result.update(ok=False, error="No Windows printer is installed.")
+                    completed.set()
+                    return
+
+                webview2 = window.native.webview
+                core = webview2.CoreWebView2
+                settings = core.Environment.CreatePrintSettings()
+                settings.PrinterName = printer
+                settings.ShouldPrintBackgrounds = True
+                settings.ShouldPrintHeaderAndFooter = False
+                result["printer"] = printer
+                task = core.PrintAsync(settings)
+                task.GetAwaiter().OnCompleted(Action(lambda: finish_print(task)))
+            except Exception as error:
+                result.update(ok=False, error=f"Could not send the receipt to the printer: {error}")
+                completed.set()
+
+        try:
+            from System import Action
+            window.native.BeginInvoke(Action(begin_print))
+        except Exception as error:
+            return {"ok": False, "error": f"Could not start direct printing: {error}"}
+
+        if not completed.wait(60):
+            return {"ok": False, "error": "The printer did not finish within 60 seconds. Check its status and paper."}
+        return result
 
     def get_state(self):
         categories = as_dicts(self.store.db.execute("SELECT * FROM categories ORDER BY sort_order,name").fetchall())
