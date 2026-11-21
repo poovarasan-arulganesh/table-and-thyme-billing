@@ -10,7 +10,7 @@ An offline-first restaurant billing app for Windows. The billing computer stores
 - The Windows Biller screen refreshes its waiter list every 30 seconds. The tablet Waiter route shows only the waiter interface, uses mobile and tablet layouts, displays each dish quantity on its menu button, and disables double-tap zoom.
 - The waiter QR and tablet link appear in the Windows app’s Waiter screen. The mobile/tablet Waiter page hides the QR and link.
 - Dine-in and delivery orders, with the dine-in table selector synchronized with Admin mode.
-- Printable HIGHWAY29 bill with centered logo, address, phone, item/quantity/price/amount columns, split CGST and SGST, and Tamil thank-you footer.
+- Direct thermal receipt printing with no in-app bill preview, centered HIGHWAY29 logo/address/phone, item/quantity/price/amount columns, split CGST and SGST, and Tamil thank-you footer. The receipt is formatted for the 80 mm Hellett BillQuick Lite. In the Windows printer preferences, select the 80 mm receipt roll, zero margins, and enable the cutter if the driver exposes that setting.
 - Full-screen desktop mode with F11 as the exit shortcut, smooth scrolling, and a theme-aware green scrollbar.
 - Admin mode for creating, renaming, and removing categories, dishes, and tables. Dish records include name, price, optional description, and an uploaded photo.
 - Sales reports with a date range or all-time view, completed order count, GST collected, best-selling dishes, and recent orders.
@@ -50,4 +50,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.9.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
+Tag a version such as `v1.10.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
