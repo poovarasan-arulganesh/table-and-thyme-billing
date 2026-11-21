@@ -16,6 +16,7 @@ An offline-first restaurant billing app for Windows. The billing computer stores
 - Sales reports with a date range or all-time view, completed order count, GST collected, best-selling dishes, and recent orders.
 - Export date filtered order lists and GST summaries to Excel, or save the report as CSV. Resetting sales history deletes completed bills and archived waiter orders while keeping unbilled waiter orders.
 - Light and dark themes.
+- HIGHWAY29 branding uses the supplied logo in the app, the Windows executable icon, and mobile home-screen icons; the printed receipt logo stays separate.
 - Orders entered on a tablet during a temporary connection loss are kept in that browser and sync when the billing computer is reachable again. Bills can be finalized after reconnecting.
 - Local storage keeps the billing computer working during an internet outage. Waiter tablets still need the restaurant Wi-Fi connection to reach the billing computer.
 
@@ -50,4 +51,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.21.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
+Tag a version such as `v1.22.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.

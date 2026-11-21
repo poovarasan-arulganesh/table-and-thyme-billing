@@ -846,6 +846,12 @@ def main():
     def assets(name):
         return send_from_directory(root / "assets", name)
 
+    @app.get("/manifest.webmanifest")
+    def app_manifest():
+        response = send_from_directory(root, "manifest.webmanifest")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/photos/<path:name>")
     def photos(name):
         return send_from_directory(api.data / "photos", name)
