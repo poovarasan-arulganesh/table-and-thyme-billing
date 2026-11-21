@@ -78,6 +78,11 @@ class Store:
           id INTEGER PRIMARY KEY, waiter_order_id INTEGER NOT NULL REFERENCES waiter_orders(id) ON DELETE CASCADE,
           dish_id INTEGER, dish_name TEXT NOT NULL, unit_price REAL NOT NULL,
           quantity INTEGER NOT NULL, line_total REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS waiter_print_requests(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          waiter_order_id INTEGER NOT NULL REFERENCES waiter_orders(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'pending', error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '');
         """)
         if self.db.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 0:
             categories = [
@@ -258,7 +263,11 @@ class Api:
 
     def list_waiter_orders(self):
         rows = self.store.db.execute(
-            "SELECT * FROM waiter_orders WHERE status NOT IN ('billed','cancelled') ORDER BY updated_at DESC, id DESC"
+            "SELECT w.*,(SELECT status FROM waiter_print_requests p WHERE p.waiter_order_id=w.id ORDER BY p.id DESC LIMIT 1) AS print_status,"
+            "(SELECT error FROM waiter_print_requests p WHERE p.waiter_order_id=w.id ORDER BY p.id DESC LIMIT 1) AS print_error "
+            "FROM waiter_orders w WHERE (w.status NOT IN ('billed','cancelled') OR "
+            "(w.status='billed' AND (SELECT status FROM waiter_print_requests p WHERE p.waiter_order_id=w.id ORDER BY p.id DESC LIMIT 1)='failed')) "
+            "ORDER BY w.updated_at DESC,w.id DESC"
         ).fetchall()
         orders = []
         for row in rows:
@@ -318,6 +327,53 @@ class Api:
             result = self.store.db.execute("UPDATE waiter_orders SET status='ready',updated_at=? WHERE id=? AND status IN ('open','sent')",
                                            (datetime.now().astimezone().isoformat(timespec="seconds"), int(order_id)))
         return {"ok": result.rowcount == 1, "error": "Order not found or already billed." if result.rowcount != 1 else ""}
+
+    def request_waiter_print(self, order_id):
+        """Queue a ready waiter order for printing from the Windows billing station."""
+        order = self.store.db.execute("SELECT status FROM waiter_orders WHERE id=?", (int(order_id),)).fetchone()
+        if not order or order["status"] not in ("ready", "billed"):
+            return {"ok": False, "error": "The Windows biller must mark this order ready before it can be printed."}
+        pending = self.store.db.execute(
+            "SELECT id FROM waiter_print_requests WHERE waiter_order_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+            (int(order_id),)).fetchone()
+        if pending:
+            return {"ok": True, "request_id": pending["id"], "message": "This receipt is already queued at the Windows billing computer."}
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        with self.store.db:
+            cursor = self.store.db.execute(
+                "INSERT INTO waiter_print_requests(waiter_order_id,status,created_at,updated_at) VALUES(?,'pending',?,?)",
+                (int(order_id), now, now))
+        return {"ok": True, "request_id": cursor.lastrowid, "message": "Receipt sent to the Windows billing computer."}
+
+    def list_waiter_print_requests(self):
+        rows = self.store.db.execute(
+            "SELECT p.id,p.waiter_order_id,w.bill_order_id FROM waiter_print_requests p "
+            "JOIN waiter_orders w ON w.id=p.waiter_order_id WHERE p.status='pending' ORDER BY p.id"
+        ).fetchall()
+        return {"ok": True, "requests": as_dicts(rows)}
+
+    def finish_waiter_print_request(self, request_id, success, error=""):
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        status = "completed" if success else "failed"
+        with self.store.db:
+            result = self.store.db.execute(
+                "UPDATE waiter_print_requests SET status=?,error=?,updated_at=? WHERE id=? AND status='pending'",
+                (status, "" if success else str(error or "Could not print the receipt."), now, int(request_id)))
+        return {"ok": result.rowcount == 1}
+
+    def get_waiter_bill(self, waiter_order_id):
+        row = self.store.db.execute(
+            "SELECT w.bill_order_id,o.created_at,o.service_type,o.table_name,o.subtotal,o.gst,o.total "
+            "FROM waiter_orders w JOIN orders o ON o.id=w.bill_order_id WHERE w.id=? AND w.status='billed'",
+            (int(waiter_order_id),)).fetchone()
+        if not row:
+            return {"ok": False, "error": "A bill has not been created for this waiter order."}
+        items = as_dicts(self.store.db.execute(
+            "SELECT dish_name AS name,unit_price AS price,quantity,line_total FROM order_items WHERE order_id=? ORDER BY id",
+            (row["bill_order_id"],)).fetchall())
+        return {"ok": True, "order_id": row["bill_order_id"], "waiter_order_id": int(waiter_order_id),
+                "created_at": row["created_at"], "service": row["service_type"], "table": row["table_name"],
+                "subtotal": row["subtotal"], "gst": row["gst"], "total": row["total"], "items": items}
 
     def update_waiter_order_from_biller(self, order_id, items):
         order = self.store.db.execute("SELECT status FROM waiter_orders WHERE id=?", (int(order_id),)).fetchone()
@@ -648,7 +704,7 @@ def main():
     def api_call(method):
         if method not in exposed:
             return jsonify({"ok": False, "error": "Unknown operation."}), 404
-        waiter_methods = {"get_state", "list_waiter_orders", "save_waiter_order"}
+        waiter_methods = {"get_state", "list_waiter_orders", "save_waiter_order", "request_waiter_print"}
         if request.remote_addr not in ("127.0.0.1", "::1"):
             if request.cookies.get("client_mode") != "waiter" or method not in waiter_methods:
                 return jsonify({"ok": False, "error": "This operation is only available in the Waiter screen."}), 403
