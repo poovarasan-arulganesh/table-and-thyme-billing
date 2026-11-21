@@ -51,4 +51,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.23.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
+Tag a version such as `v1.24.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
