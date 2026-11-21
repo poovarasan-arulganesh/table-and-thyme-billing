@@ -663,7 +663,7 @@ def main():
 
     server = create_server(app, host="0.0.0.0", port=8765, threads=16)
     Thread(target=server.run, daemon=True).start()
-    webview.create_window(APP_NAME, "http://127.0.0.1:8765/", width=1440, height=960,
+    webview.create_window(APP_NAME, "http://127.0.0.1:8765/", width=1440, height=960, fullscreen=True,
                           min_size=(1024, 720), js_api=api, background_color="#fbfaf7")
     webview.start(debug=False)
 
