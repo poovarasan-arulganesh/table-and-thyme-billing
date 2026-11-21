@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import base64
 import csv
+import json
+import math
 from functools import wraps
 from io import BytesIO
 import os
@@ -10,6 +12,8 @@ import re
 import sqlite3
 import socket
 import sys
+import uuid
+import zipfile
 from threading import Event, RLock, Thread
 from datetime import date, datetime
 from pathlib import Path
@@ -495,6 +499,138 @@ class Api:
         self.store.db.execute("DELETE FROM dishes WHERE id=?", (int(dish_id),)); self.store.db.commit()
         return {"ok": True}
 
+    def export_menu_zip(self):
+        """Export categories, dishes, and referenced images in a portable ZIP archive."""
+        categories = as_dicts(self.store.db.execute(
+            "SELECT name,description,sort_order FROM categories ORDER BY sort_order,name").fetchall())
+        dishes = as_dicts(self.store.db.execute(
+            "SELECT d.id,d.name,d.description,d.price,c.name AS category,d.image_path "
+            "FROM dishes d JOIN categories c ON c.id=d.category_id ORDER BY c.sort_order,c.name,d.name").fetchall())
+        manifest = {"format": "HIGHWAY29 menu", "version": 1, "categories": categories, "dishes": []}
+        filename = f"menu-export-{uuid.uuid4().hex}.zip"
+        target = self.data / "reports" / filename
+        total_size = 0
+        try:
+            with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for dish in dishes:
+                    image_ref = ""
+                    image_path = Path(dish.pop("image_path") or "")
+                    if image_path.is_file():
+                        content = image_path.read_bytes()
+                        total_size += len(content)
+                        if len(content) > 8 * 1024 * 1024 or total_size > 64 * 1024 * 1024:
+                            raise ValueError("Menu images exceed the ZIP export size limit (8 MB per image, 64 MB total).")
+                        suffix = image_path.suffix.lower()
+                        if suffix not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                            suffix = ".jpg"
+                        safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "-", Path(dish["name"]).stem).strip("-") or "dish"
+                        image_ref = f"image_source/{int(dish['id']):05d}-{safe_name}{suffix}"
+                        archive.writestr(image_ref, content)
+                    dish["image"] = image_ref
+                    dish.pop("id", None)
+                    manifest["dishes"].append(dish)
+                archive.writestr("menu.json", json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+            return {"ok": True, "filename": filename, "url": f"/menu-exports/{filename}",
+                    "categories": len(categories), "dishes": len(dishes)}
+        except (OSError, ValueError, zipfile.BadZipFile) as error:
+            target.unlink(missing_ok=True)
+            return {"ok": False, "error": str(error) or "Could not export the menu ZIP."}
+
+    def import_menu_zip(self, archive_base64):
+        """Replace the menu from a validated portable ZIP while retaining sales history."""
+        try:
+            payload = base64.b64decode(str(archive_base64 or ""), validate=True)
+            if not payload or len(payload) > 64 * 1024 * 1024:
+                return {"ok": False, "error": "Choose a menu ZIP smaller than 64 MB."}
+            with zipfile.ZipFile(BytesIO(payload), "r") as archive:
+                files = {}
+                total_uncompressed = 0
+                for info in archive.infolist():
+                    if info.is_dir():
+                        continue
+                    path = Path(info.filename)
+                    parts = info.filename.replace("\\", "/").split("/")
+                    if path.is_absolute() or ".." in parts or info.filename.startswith("/"):
+                        return {"ok": False, "error": "The ZIP contains an unsafe file path."}
+                    if len(files) >= 2000:
+                        return {"ok": False, "error": "The ZIP contains too many files."}
+                    total_uncompressed += info.file_size
+                    if total_uncompressed > 64 * 1024 * 1024:
+                        return {"ok": False, "error": "The expanded menu ZIP is larger than 64 MB."}
+                    if info.file_size > 8 * 1024 * 1024 and info.filename != "menu.json":
+                        return {"ok": False, "error": "Menu images must be 8 MB or smaller."}
+                    files[info.filename] = archive.read(info)
+            if "menu.json" not in files or len(files["menu.json"]) > 4 * 1024 * 1024:
+                return {"ok": False, "error": "The ZIP is missing a valid menu.json file."}
+            manifest = json.loads(files["menu.json"].decode("utf-8"))
+            if not isinstance(manifest, dict):
+                return {"ok": False, "error": "The ZIP menu manifest is not valid."}
+            if manifest.get("format") != "HIGHWAY29 menu" or manifest.get("version") != 1:
+                return {"ok": False, "error": "This ZIP is not a supported HIGHWAY29 menu export."}
+            categories = manifest.get("categories")
+            dishes = manifest.get("dishes")
+            if not isinstance(categories, list) or not isinstance(dishes, list) or not categories:
+                return {"ok": False, "error": "The menu ZIP must contain categories and dishes lists."}
+            if len(categories) > 500 or len(dishes) > 10000:
+                return {"ok": False, "error": "The ZIP contains too many categories or dishes."}
+            category_names, clean_categories = set(), []
+            for index, category in enumerate(categories):
+                if not isinstance(category, dict):
+                    return {"ok": False, "error": "The ZIP contains an invalid category entry."}
+                name = str(category.get("name") or "").strip()
+                key = name.casefold()
+                if not name or len(name) > 200 or key in category_names:
+                    return {"ok": False, "error": "Category names must be present, unique, and at most 200 characters."}
+                category_names.add(key)
+                clean_categories.append({"name": name, "description": str(category.get("description") or "")[:2000],
+                                         "sort_order": int(category.get("sort_order", index))})
+            category_lookup = {item["name"].casefold(): item["name"] for item in clean_categories}
+            clean_dishes, imported_photos = [], []
+            supported_suffixes = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".webp": "webp", ".gif": "gif"}
+            for dish in dishes:
+                if not isinstance(dish, dict):
+                    return {"ok": False, "error": "The ZIP contains an invalid dish entry."}
+                name = str(dish.get("name") or "").strip()
+                category = category_lookup.get(str(dish.get("category") or "").strip().casefold())
+                try:
+                    price = float(dish.get("price"))
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": f"Invalid price for menu item {name or '(unnamed)'}."}
+                if not name or len(name) > 200 or not category or not math.isfinite(price) or price < 0:
+                    return {"ok": False, "error": f"Invalid name, category, or price for menu item {name or '(unnamed)'}."}
+                image_ref = str(dish.get("image") or "")
+                image_path = ""
+                if image_ref:
+                    parts = image_ref.replace("\\", "/").split("/")
+                    suffix = Path(image_ref).suffix.lower()
+                    if len(parts) != 2 or parts[0] != "image_source" or ".." in parts or suffix not in supported_suffixes:
+                        return {"ok": False, "error": f"Invalid image reference for {name}."}
+                    image_content = files.get(image_ref)
+                    if not image_content or len(image_content) > 8 * 1024 * 1024:
+                        return {"ok": False, "error": f"Image for {name} is missing or exceeds 8 MB."}
+                    encoded = base64.b64encode(image_content).decode("ascii")
+                    image_path = self._save_photo(f"data:image/{supported_suffixes[suffix]};base64,{encoded}", Path(image_ref).name)
+                    imported_photos.append(image_path)
+                clean_dishes.append({"name": name, "category": category,
+                                     "description": str(dish.get("description") or "")[:2000],
+                                     "price": price, "image_path": image_path})
+            with self.store.db:
+                self.store.db.execute("DELETE FROM categories")
+                category_ids = {}
+                for category in clean_categories:
+                    cursor = self.store.db.execute(
+                        "INSERT INTO categories(name,description,sort_order) VALUES(?,?,?)",
+                        (category["name"], category["description"], category["sort_order"]))
+                    category_ids[category["name"].casefold()] = cursor.lastrowid
+                self.store.db.executemany(
+                    "INSERT INTO dishes(category_id,name,description,price,image_path) VALUES(?,?,?,?,?)",
+                    [(category_ids[dish["category"].casefold()], dish["name"], dish["description"],
+                      dish["price"], dish["image_path"]) for dish in clean_dishes])
+            return {"ok": True, "categories": len(clean_categories), "dishes": len(clean_dishes),
+                    "images": len(imported_photos)}
+        except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile, OSError) as error:
+            return {"ok": False, "error": f"Could not import this menu ZIP: {error}"}
+
     def add_table(self, name):
         name = (name or "").strip()
         if not name:
@@ -672,7 +808,8 @@ def main():
     root = resource_root()
     api = Api(root)
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
+    # The import request carries base64 JSON (about 4/3 the ZIP size).
+    app.config["MAX_CONTENT_LENGTH"] = 90 * 1024 * 1024
     exposed = {name for name in dir(api) if not name.startswith("_") and callable(getattr(api, name))}
 
     @app.get("/")
@@ -701,6 +838,12 @@ def main():
     @app.get("/photos/<path:name>")
     def photos(name):
         return send_from_directory(api.data / "photos", name)
+
+    @app.get("/menu-exports/<name>")
+    def menu_exports(name):
+        if request.remote_addr not in ("127.0.0.1", "::1") or not re.fullmatch(r"menu-export-[a-f0-9]{32}\.zip", name):
+            return jsonify({"ok": False, "error": "Menu exports are only available in Admin mode on this computer."}), 403
+        return send_from_directory(api.data / "reports", name, as_attachment=True, download_name="HIGHWAY29-menu.zip")
 
     @app.post("/api/<method>")
     def api_call(method):
