@@ -64,6 +64,7 @@ class Store:
           name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
           price REAL NOT NULL CHECK(price >= 0), image_path TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS dining_tables(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+        CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS orders(
           id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
           service_type TEXT NOT NULL, table_name TEXT NOT NULL DEFAULT '',
@@ -151,6 +152,51 @@ class Api:
         if path and Path(path).is_file():
             return "/photos/" + Path(path).name
         return ""
+
+    def get_receipt_layout(self):
+        row = self.store.db.execute(
+            "SELECT value FROM app_settings WHERE key='receipt_layout'").fetchone()
+        if not row:
+            return None
+        try:
+            layout = json.loads(row["value"])
+            return layout if isinstance(layout, dict) else None
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+    def save_receipt_layout(self, layout):
+        if isinstance(layout, str):
+            try:
+                layout = json.loads(layout)
+            except json.JSONDecodeError:
+                return {"ok": False, "error": "The receipt design is not valid JSON."}
+        if not isinstance(layout, dict) or len(json.dumps(layout, ensure_ascii=False)) > 32000:
+            return {"ok": False, "error": "The receipt design is invalid or too large."}
+        order = layout.get("order")
+        custom = layout.get("custom", [])
+        if not isinstance(order, list) or len(order) > 40 or not all(isinstance(item, str) for item in order):
+            return {"ok": False, "error": "The receipt design contains an invalid section order."}
+        if not isinstance(custom, list) or len(custom) > 20:
+            return {"ok": False, "error": "The receipt design can contain up to 20 custom text sections."}
+        allowed = {"logo", "contact", "date", "meta", "items", "subtotal", "tax", "grand", "footer"}
+        custom_ids = set()
+        for block in custom:
+            if not isinstance(block, dict) or not isinstance(block.get("id"), str) or not re.fullmatch(r"custom_[a-zA-Z0-9_-]{1,32}", block["id"]):
+                return {"ok": False, "error": "The receipt design contains an invalid custom section."}
+            if len(str(block.get("text", ""))) > 500 or len(str(block.get("label", ""))) > 80:
+                return {"ok": False, "error": "Custom receipt text is too long."}
+            custom_ids.add(block["id"])
+        if len(set(order)) != len(order) or any(item not in allowed and item not in custom_ids for item in order):
+            return {"ok": False, "error": "The receipt design contains an unsupported section."}
+        try:
+            encoded = json.dumps(layout, ensure_ascii=False)
+            with self.store.db:
+                self.store.db.execute(
+                    "INSERT INTO app_settings(key,value) VALUES('receipt_layout',?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (encoded,))
+            return {"ok": True}
+        except (TypeError, ValueError, sqlite3.Error) as error:
+            return {"ok": False, "error": f"Could not save the receipt design: {error}"}
 
     def toggle_fullscreen(self):
         if not webview.windows:
@@ -259,6 +305,7 @@ class Api:
         qr_buffer = BytesIO()
         qrcode.make(waiter_url).save(qr_buffer, format="PNG")
         return {"categories": categories, "dishes": dishes, "tables": tables,
+                "receipt_layout": self.get_receipt_layout(),
                 "stock_sheet": "/assets/menu-food-sheet.jpg",
                 "waiter_url": waiter_url,
                 "waiter_qr_data": "data:image/png;base64," + base64.b64encode(qr_buffer.getvalue()).decode("ascii"),
