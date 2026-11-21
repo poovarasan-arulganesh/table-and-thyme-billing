@@ -331,8 +331,8 @@ class Api:
     def request_waiter_print(self, order_id):
         """Queue a ready waiter order for printing from the Windows billing station."""
         order = self.store.db.execute("SELECT status FROM waiter_orders WHERE id=?", (int(order_id),)).fetchone()
-        if not order or order["status"] not in ("ready", "billed"):
-            return {"ok": False, "error": "The Windows biller must mark this order ready before it can be printed."}
+        if not order or order["status"] not in ("open", "sent", "ready", "billed"):
+            return {"ok": False, "error": "This waiter order is no longer available to print."}
         pending = self.store.db.execute(
             "SELECT id FROM waiter_print_requests WHERE waiter_order_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
             (int(order_id),)).fetchone()
@@ -404,13 +404,15 @@ class Api:
         return {"ok": result.rowcount == 1,
                 "error": "This order can no longer be cancelled." if result.rowcount != 1 else ""}
 
-    def bill_waiter_order(self, order_id):
+    def bill_waiter_order(self, order_id, allow_unready=False):
         try:
             now = datetime.now().astimezone().isoformat(timespec="seconds")
             with self.store.db:
-                order = self.store.db.execute("SELECT * FROM waiter_orders WHERE id=? AND status='ready'", (int(order_id),)).fetchone()
+                order = self.store.db.execute(
+                    "SELECT * FROM waiter_orders WHERE id=? AND (status='ready' OR (?=1 AND status IN ('open','sent'))) ",
+                    (int(order_id), int(bool(allow_unready)))).fetchone()
                 if not order:
-                    return {"ok": False, "error": "Mark the food ready in the Windows Biller screen before printing its bill."}
+                    return {"ok": False, "error": "This waiter order is no longer available to bill."}
                 items = as_dicts(self.store.db.execute(
                     "SELECT dish_name AS name,unit_price AS price,quantity,line_total FROM waiter_order_items WHERE waiter_order_id=? ORDER BY id",
                     (int(order_id),)).fetchall())
