@@ -150,14 +150,28 @@ class Api:
         webview.windows[0].toggle_fullscreen()
         return {"ok": True}
 
-    def print_receipt(self):
-        """Print the prepared receipt silently to the installed BillQuick/default printer."""
+    def list_printers(self):
+        """Return installed Windows printers and the current system default."""
+        if sys.platform != "win32":
+            return {"ok": False, "printers": [], "default": "", "error": "Printer selection is available in the Windows billing app."}
+        try:
+            from System.Drawing.Printing import PrinterSettings
+            printers = [str(name) for name in PrinterSettings.InstalledPrinters]
+            default = str(PrinterSettings().PrinterName or "")
+            preferred = next((name for name in printers if "billquick" in name.lower() or "helet" in name.lower()), default)
+            return {"ok": True, "printers": printers, "default": default, "preferred": preferred}
+        except Exception as error:
+            return {"ok": False, "printers": [], "default": "", "error": f"Could not list installed printers: {error}"}
+
+    def print_receipt(self, requested_printer=""):
+        """Print the prepared receipt silently to the selected installed printer."""
         if sys.platform != "win32":
             return {"ok": False, "error": "Direct receipt printing is available in the Windows billing app."}
         if not webview.windows:
             return {"ok": False, "error": "The billing window is not ready for printing."}
 
         window = webview.windows[0]
+        requested_printer = str(requested_printer or "").strip()
         completed = Event()
         result = {}
 
@@ -181,7 +195,11 @@ class Api:
                 from System.Drawing.Printing import PrinterSettings
 
                 printers = [str(name) for name in PrinterSettings.InstalledPrinters]
-                printer = next((name for name in printers
+                if requested_printer and requested_printer not in printers:
+                    result.update(ok=False, error="That printer is no longer installed. Choose an available printer in Admin mode.")
+                    completed.set()
+                    return
+                printer = requested_printer or next((name for name in printers
                                 if "billquick" in name.lower() or "helet" in name.lower()), None)
                 if printer is None:
                     printer = str(PrinterSettings().PrinterName or "")
