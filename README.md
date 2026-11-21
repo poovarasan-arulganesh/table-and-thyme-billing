@@ -6,11 +6,11 @@ An offline-first restaurant billing app for Windows. The billing computer stores
 
 - Casual mode with menu search, category filters, photo dish cards, prominent add buttons, quantity controls, order totals, and a 5% GST estimate.
 - Waiter orders for multiple tables, saved to a shared open-order list. Waiters can reopen and edit orders, then send them to the Windows Biller queue. Each send starts a fresh order for the next table.
-- The Windows Biller screen groups orders by waiter. Select a waiter to review prices, add or edit dishes, cancel an individual table order, and mark food ready. A waiter can then select that ready order on the phone and request its receipt; the Windows billing computer creates the bill and prints it on its selected printer.
+- The Windows Biller screen groups orders by waiter. Select a waiter to review prices, add or edit dishes, cancel an individual table order, and mark food ready. The phone list includes Edit order, Delete order, and Print order actions. Print requests from ready orders are routed through the Windows billing computer to its selected printer.
 - The Windows Biller screen refreshes its waiter list every 30 seconds. The tablet Waiter route shows only the waiter interface, uses mobile and tablet layouts, displays each dish quantity on its menu button, and disables double-tap zoom.
 - The waiter QR and tablet link appear in the Windows app’s Waiter screen. The mobile/tablet Waiter page hides the QR and link.
 - Dine-in and delivery orders, with the dine-in table selector synchronized with Admin mode.
-- Direct thermal receipt printing to the printer selected in Admin mode without an in-app or Windows print preview. Receipt content is set inside the printer-safe width of the 80 mm roll, aligned to keep every amount printable, with reduced top spacing, centered HIGHWAY29 logo/address/phone, split CGST and SGST, and Tamil thank-you footer. The Admin screen lists installed Windows printers and remembers your selection on this device. Receipt printing can show or hide the tax section using the Admin toggle (off by default). In the Windows printer preferences, select the 80 mm receipt roll, zero margins, and enable the cutter if the driver exposes that setting.
+- Direct thermal receipt printing to the printer selected in Admin mode without an in-app or Windows print preview. Receipt content is set inside the printer-safe width of the 80 mm roll, aligned to keep every amount printable, with a flush top and 1 mm bottom padding, centered HIGHWAY29 logo/address/phone, split CGST and SGST, and Tamil thank-you footer. The Admin screen lists installed Windows printers and remembers your selection on this device. Receipt printing can show or hide the tax section using the Admin toggle (off by default). In the Windows printer preferences, select the 80 mm receipt roll, zero margins, and enable the cutter if the driver exposes that setting.
 - The desktop app opens full screen; press F11 to switch to windowed mode, smooth scrolling, and a theme-aware green scrollbar.
 - Admin mode for creating, renaming, and removing categories, dishes, and tables. Dish records include name, price, optional description, and an uploaded photo.
 - Sales reports with a date range or all-time view, completed order count, GST collected, best-selling dishes, and recent orders.
@@ -50,4 +50,4 @@ The folder contains `restaurant.sqlite3` and uploaded dish photos. Back up this 
 
 ## Release
 
-Tag a version such as `v1.16.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.
+Tag a version such as `v1.17.0` and push the tag. GitHub Actions builds and publishes `HIGHWAY29Billing.exe` to that release.

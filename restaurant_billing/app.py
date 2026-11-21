@@ -704,7 +704,7 @@ def main():
     def api_call(method):
         if method not in exposed:
             return jsonify({"ok": False, "error": "Unknown operation."}), 404
-        waiter_methods = {"get_state", "list_waiter_orders", "save_waiter_order", "request_waiter_print"}
+        waiter_methods = {"get_state", "list_waiter_orders", "save_waiter_order", "request_waiter_print", "cancel_waiter_order"}
         if request.remote_addr not in ("127.0.0.1", "::1"):
             if request.cookies.get("client_mode") != "waiter" or method not in waiter_methods:
                 return jsonify({"ok": False, "error": "This operation is only available in the Waiter screen."}), 403
